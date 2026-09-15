@@ -1328,6 +1328,27 @@ export function fakeCellReleased() {
     return fakeReleased;
 }
 
+/** After primitive is live: drop SSV/addrof groom allocations (~137 MB) without
+ *  touching liveCandidate (window.p keeps working; pair promotion not required). */
+export function dropGroomFootprint() {
+    if (fakeReleased || liveCandidate === null)
+        return { dropped: false, reason: fakeReleased ? "released" : "no-candidate" };
+    keepAlive = null;
+    keepIndex = 0;
+    getterCarrier = null;
+    preparedSymbolObject = null;
+    capturedString = null;
+    capturedWords = null;
+    fillerGraph = null;
+    outerGraph = null;
+    referenceTarget = null;
+    leakedScope = null;
+    try { clearPredecessor(); } catch (_) { }
+    predecessorWords = null;
+    try { history.replaceState(null, ""); } catch (_) { }
+    return { dropped: true };
+}
+
 export function carrierHeaderCopy() {
     return rwHeader.slice(0, CELL_BYTES);
 }

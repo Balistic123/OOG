@@ -1,7 +1,7 @@
 // ?v=10 must match mem.js's specifier EXACTLY or core.js builds a second
 // module record and releaseFakeCell() (only call site: mem.js:662) reaches a
 // virgin instance, pinning ~137 MB for the life of the page.
-import { establishPrimitive } from "./core.js?v=10";
+import { establishPrimitive, dropGroomFootprint } from "./core.js?v=10";
 import { installWindowP, pairStatus } from "./mem.js";
 import { int64 } from "./int64.js";
 import { offsetsFor } from "./ps4_offsets.js";
@@ -131,7 +131,7 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
-const CHAIN_BUILD = "chain_1352-2026-03-26c-poc";
+const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
 
 (async function () {
     let p = null;
@@ -260,6 +260,13 @@ const CHAIN_BUILD = "chain_1352-2026-03-26c-poc";
         } else {
             mark("SWEEP-SKIPPED", "promoted=" + pairStatus.promoted
                 + " cycles=" + SWEEP_CYCLES);
+        }
+        if (!pairStatus.promoted) {
+            const gd = dropGroomFootprint();
+            mark("GROOM-DROPPED", "ok=" + (gd.dropped ? 1 : 0)
+                + (gd.reason ? " reason=" + gd.reason : ""));
+            for (let gi = 0; gi < 4; ++gi)
+                await new Promise(r => setTimeout(r, 0));
         }
         mark("PRIMITIVE-OK", "");
 
