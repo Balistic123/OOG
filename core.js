@@ -1173,7 +1173,9 @@ function reportComposition() {
     emit("READ-PRIMITIVE-PASS", "arbitrary-read-established"
         + "-firmware-offsets-asserted=none");
 
+    dropGroomFootprintInternal();
     try { history.replaceState(null, ""); } catch { }
+    emit("GROOM-DROPPED", "auto-on-primitive-pass");
 
     stopped = true;
     running = false;
@@ -1328,25 +1330,32 @@ export function fakeCellReleased() {
     return fakeReleased;
 }
 
-/** After primitive is live: drop SSV/addrof groom allocations (~137 MB) without
- *  touching liveCandidate (window.p keeps working; pair promotion not required). */
-export function dropGroomFootprint() {
+function dropGroomFootprintInternal() {
     if (fakeReleased || liveCandidate === null)
-        return { dropped: false, reason: fakeReleased ? "released" : "no-candidate" };
+        return false;
+    if (fillerGraph !== null) {
+        fillerGraph.length = 0;
+        fillerGraph = null;
+    }
+    outerGraph = null;
     keepAlive = null;
     keepIndex = 0;
     getterCarrier = null;
     preparedSymbolObject = null;
     capturedString = null;
     capturedWords = null;
-    fillerGraph = null;
-    outerGraph = null;
     referenceTarget = null;
     leakedScope = null;
     try { clearPredecessor(); } catch (_) { }
     predecessorWords = null;
+    return true;
+}
+
+/** Idempotent: drop SSV/addrof groom (~137 MB) while keeping liveCandidate/window.p. */
+export function dropGroomFootprint() {
+    const ok = dropGroomFootprintInternal();
     try { history.replaceState(null, ""); } catch (_) { }
-    return { dropped: true };
+    return { dropped: ok, reason: ok ? null : (fakeReleased ? "released" : "no-candidate") };
 }
 
 export function carrierHeaderCopy() {

